@@ -788,3 +788,185 @@ async fn eval_endpoints_return_error_when_eval_disabled() {
 
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
+
+// ---------------------------------------------------------------------------
+// Anthropic Messages API tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn messages_non_streaming_returns_anthropic_response_shape() {
+    let app = build_router(test_state());
+
+    let body = serde_json::json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "temperature": 0.6,
+        "stream": false,
+        "system": "You are a helpful assistant.",
+        "messages": [
+            {"role": "user", "content": "Hello world"}
+        ]
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(json["id"], "msg_local");
+    assert_eq!(json["type"], "message");
+    assert_eq!(json["role"], "assistant");
+    assert_eq!(json["model"], "claude-local");
+    assert_eq!(json["stop_reason"], "end_turn");
+
+    // Content is an array with one text block.
+    let content = json["content"].as_array().unwrap();
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["type"], "text");
+    assert!(content[0]["text"].is_string());
+
+    // Usage has input_tokens and output_tokens.
+    assert!(json["usage"]["input_tokens"].is_u64());
+    assert!(json["usage"]["output_tokens"].is_u64());
+}
+
+#[tokio::test]
+async fn messages_streaming_returns_correct_sse_event_sequence() {
+    let app = build_router(test_state());
+
+    let body = serde_json::json!({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4096,
+        "stream": true,
+        "system": "You are a helpful assistant.",
+        "messages": [
+            {"role": "user", "content": "Hello"}
+        ]
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/messages")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("text/event-stream"));
+
+    let bytes = axum::body::to_bytes(resp.into_body(), 65536).await.unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+    // Parse SSE events from proxy.py format: "event: <name>\n<json>\n\n"
+    let events: Vec<(&str, serde_json::Value)> = text
+        .split("\n\n")
+        .filter(|chunk| !chunk.is_empty())
+        .map(|chunk| {
+            let mut lines = chunk.splitn(2, '\n');
+            let event_line = lines.next().unwrap();
+            let event_name = event_line.strip_prefix("event: ").unwrap();
+            let json_line = lines.next().unwrap();
+            let json: serde_json::Value = serde_json::from_str(json_line).unwrap();
+            (event_name, json)
+        })
+        .collect();
+
+    // Verify the event sequence: message_start, content_block_start,
+    // one or more content_block_delta, content_block_stop, message_delta,
+    // message_stop.
+    assert!(events.len() >= 6, "expected at least 6 events, got {}", events.len());
+
+    let (name, data) = &events[0];
+    assert_eq!(*name, "message_start");
+    assert_eq!(data["type"], "message_start");
+    assert_eq!(data["message"]["id"], "msg_local");
+    assert_eq!(data["message"]["role"], "assistant");
+
+    let (name, data) = &events[1];
+    assert_eq!(*name, "content_block_start");
+    assert_eq!(data["type"], "content_block_start");
+    assert_eq!(data["index"], 0);
+
+    // Middle events are content_block_delta.
+    for event in &events[2..events.len() - 3] {
+        assert_eq!(event.0, "content_block_delta");
+        assert_eq!(event.1["type"], "content_block_delta");
+        assert_eq!(event.1["delta"]["type"], "text_delta");
+        assert!(event.1["delta"]["text"].is_string());
+    }
+
+    let (name, data) = &events[events.len() - 3];
+    assert_eq!(*name, "content_block_stop");
+    assert_eq!(data["type"], "content_block_stop");
+
+    let (name, data) = &events[events.len() - 2];
+    assert_eq!(*name, "message_delta");
+    assert_eq!(data["delta"]["stop_reason"], "end_turn");
+    assert!(data["usage"]["output_tokens"].is_u64());
+
+    let (name, data) = &events[events.len() - 1];
+    assert_eq!(*name, "message_stop");
+    assert_eq!(data["type"], "message_stop");
+}
+
+#[tokio::test]
+async fn root_head_returns_200() {
+    let app = build_router(test_state());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("HEAD")
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn root_get_returns_status_ok() {
+    let app = build_router(test_state());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["status"], "ok");
+}

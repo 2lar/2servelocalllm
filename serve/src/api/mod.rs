@@ -1,10 +1,11 @@
+pub mod anthropic;
 pub mod middleware;
 pub mod routes;
 pub mod types;
 
 use std::sync::Arc;
 
-use axum::routing::{get, post};
+use axum::routing::{get, head, post};
 use axum::Router;
 use metrics_exporter_prometheus::PrometheusHandle;
 use tower_http::cors::CorsLayer;
@@ -28,8 +29,11 @@ pub struct AppState {
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
+        .route("/", head(routes::root_head))
+        .route("/", get(routes::root_get))
         .route("/health", get(routes::health))
         .route("/v1/generate", post(routes::generate))
+        .route("/v1/messages", post(routes::messages))
         .route("/v1/evaluate", post(routes::evaluate))
         .route("/v1/eval/stats", get(routes::eval_stats))
         .route("/v1/eval/best", get(routes::eval_best))
