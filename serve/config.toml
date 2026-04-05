@@ -1,0 +1,42 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[llama]
+enabled = false
+binary = "./llama.cpp/build/bin/llama-server"
+model = "~/llm/models/qwen35-27b-q8.gguf"
+host = "0.0.0.0"
+port = 8080
+gpu_layers = 99
+ctx_size = 16384
+health_check_timeout_secs = 60
+health_check_interval_ms = 2000
+
+[providers.local]
+name = "local-qwen"
+url = "http://localhost:8080"
+model = "qwen35-distilled"
+timeout_secs = 120
+
+[executor]
+timeout_secs = 120
+
+[executor.retry]
+max_retries = 2
+initial_backoff_ms = 500
+max_backoff_ms = 5000
+
+[[routing.rules]]
+name = "code-tasks"
+task = "code"
+provider = "local-qwen"
+
+[[routing.rules]]
+name = "short-prompts"
+max_prompt_length = 500
+provider = "local-qwen"
+
+[[routing.rules]]
+name = "default"
+provider = "local-qwen"
