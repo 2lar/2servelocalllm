@@ -3,9 +3,9 @@ host = "0.0.0.0"
 port = 11434
 
 [llama]
-enabled = false
-binary = "./llama.cpp/build/bin/llama-server"
-model = "~/llm/models/qwen35-27b-q8.gguf"
+enabled = true
+binary = "../llama.cpp/build/bin/llama-server"
+model = "../models/qwen35-27b-q8.gguf"
 host = "0.0.0.0"
 port = 8080
 gpu_layers = 99

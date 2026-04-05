@@ -22,7 +22,30 @@ impl ProcessManager {
             "starting llama-server"
         );
 
-        let child = Command::new(&config.binary)
+        let mut cmd = Command::new(&config.binary);
+
+        // Ensure the dynamic linker can find shared libs next to the binary
+        // (e.g. libmtmd.so on Linux, libmtmd.dylib on macOS).
+        if let Some(bin_dir) = std::path::Path::new(&config.binary)
+            .canonicalize()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        {
+            let lib_path_var = if cfg!(target_os = "macos") {
+                "DYLD_LIBRARY_PATH"
+            } else {
+                "LD_LIBRARY_PATH"
+            };
+            let existing = std::env::var(lib_path_var).unwrap_or_default();
+            let new_val = if existing.is_empty() {
+                bin_dir.to_string_lossy().to_string()
+            } else {
+                format!("{}:{existing}", bin_dir.display())
+            };
+            cmd.env(lib_path_var, new_val);
+        }
+
+        let child = cmd
             .arg("--model")
             .arg(&config.model)
             .arg("--n-gpu-layers")

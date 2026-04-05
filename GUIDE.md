@@ -1,22 +1,15 @@
 # LLM Serving Layer — Setup & Usage Guide
-## llm-serve + llama-server on WSL2 (RTX 5090, 32GB VRAM)
+## llm-serve + llama-server
 
 ---
 
-## How It Works (Before vs Now)
+## How It Works
 
-**Before:**
 ```
-Claude Code CLI → proxy.py (port 11434) → llama-server (port 8080) → GPU
-```
-Three separate pieces, two to start manually, no routing, no metrics, no caching.
-
-**Now:**
-```
-Any App / curl
+Any App / curl / Claude Code
       │  (standard HTTP)
       ▼
-llm-serve (port 3000)              ← one binary does everything
+llm-serve (port 11434)             ← one binary does everything
 ├── Routing Engine                  decides which model handles the request
 ├── Executor                        retries, timeouts, fallbacks
 ├── Cache                           deduplicates repeated prompts
@@ -26,7 +19,7 @@ llm-serve (port 3000)              ← one binary does everything
 ├── Process Manager ──→ llama-server (port 8080, spawned automatically)
 │                              │
 │                              ▼
-│                        Qwen3.5-27B Q8_0 on RTX 5090
+│                        Your model on GPU
 │
 └── Provider Abstraction        (future: OpenAI, Anthropic, etc.)
 ```
@@ -44,97 +37,223 @@ llm-serve (port 3000)              ← one binary does everything
 │   │   ├── config.toml     ← all configuration
 │   │   ├── src/            ← source code
 │   │   └── target/release/ ← compiled binary (after cargo build)
-│   ├── llama.cpp/          ← inference engine
-│   ├── scripts/            ← old proxy.py + start.sh (reference only)
+│   ├── llama.cpp/          ← inference engine (git submodule)
+│   ├── models/             ← model weights (or symlinks)
+│   ├── scripts/            ← legacy scripts (reference only)
 │   └── docker-compose.yml  ← for Docker deployments
-├── models/
-│   └── qwen35-27b-q8.gguf ← model weights
 ```
 
 ---
 
-## First-Time Setup (Deployment Machine)
+## Quick Start (Recommended)
 
-### 1. Install Rust (one-time)
-
-Skip this if using Docker (see Docker section below).
+The setup script handles everything — detects your OS, installs dependencies, builds llama.cpp (CUDA on Linux, Metal on macOS), and builds llm-serve:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+cd ~/llm/2servelocalllm
+./setup.sh
+```
+
+The script will:
+1. Install system dependencies (cmake, pkg-config, libssl-dev on Linux; cmake on macOS)
+2. Install Rust if not present
+3. Build llama.cpp with the right GPU backend for your platform
+4. Build llm-serve
+5. Check for a model file in `models/`
+6. Offer to add shell aliases to your `~/.bashrc` or `~/.zshrc`
+
+After setup, place a GGUF model in `models/` and update the filename in `serve/config.toml` if needed.
+
+---
+
+## Manual Setup (No Docker)
+
+If you prefer to do each step yourself:
+
+### Prerequisites
+
+| Dependency | Linux (Ubuntu/Debian) | macOS |
+|-----------|----------------------|-------|
+| **Rust** | `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \| sh` | Same |
+| **cmake** | `sudo apt-get install cmake` | `brew install cmake` |
+| **OpenSSL + pkg-config** | `sudo apt-get install pkg-config libssl-dev` | Not needed (uses system Security framework) |
+| **CUDA toolkit** | Required for NVIDIA GPUs — install from [NVIDIA](https://developer.nvidia.com/cuda-downloads) | N/A (macOS uses Metal) |
+
+After installing Rust, reload your shell:
+```bash
 source "$HOME/.cargo/env"
 ```
 
-### 2. Build llama.cpp (if not already built)
+### 1. Build llama.cpp
 
+Choose the command for your platform:
+
+**Linux with NVIDIA GPU (CUDA):**
 ```bash
 cd ~/llm/2servelocalllm/llama.cpp
-cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build --config Release -j$(nproc)
 ```
 
-### 3. Build llm-serve
+> Set `-DCMAKE_CUDA_ARCHITECTURES` to your GPU's compute capability if `native` doesn't work. For example: `120` for RTX 5090, `89` for RTX 4090, `86` for RTX 3090.
+
+**macOS (Metal — Apple Silicon or Intel with AMD GPU):**
+```bash
+cd ~/llm/2servelocalllm/llama.cpp
+cmake -B build -DGGML_METAL=ON
+cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+```
+
+### 2. Build llm-serve
 
 ```bash
 cd ~/llm/2servelocalllm/serve
 cargo build --release
 ```
 
-### 4. Configure for your machine
+### 3. Place your model
 
-Edit `serve/config.toml`:
+Put a GGUF model file (or symlink) in the `models/` directory:
+
+```bash
+ls ~/llm/2servelocalllm/models/
+# e.g. qwen35-27b-q8.gguf
+```
+
+### 4. Configure
+
+Edit `serve/config.toml`. The defaults should work if your directory layout matches the structure above. The key settings:
 
 ```toml
 [llama]
-enabled = true                                          # ← change from false to true
-binary = "../llama.cpp/build/bin/llama-server"           # ← path to llama-server binary
-model = "~/llm/models/qwen35-27b-q8.gguf"               # ← path to your model
-host = "0.0.0.0"
-port = 8080
-gpu_layers = 99
-ctx_size = 16384
-health_check_timeout_secs = 60
-health_check_interval_ms = 2000
+enabled = true                                    # must be true on the GPU machine
+binary = "../llama.cpp/build/bin/llama-server"     # relative to serve/
+model = "../models/qwen35-27b-q8.gguf"             # relative to serve/
+gpu_layers = 99                                    # offload all layers to GPU
+ctx_size = 16384                                   # context window
 ```
 
-Everything else can stay as defaults.
-
----
-
-## Starting the Stack
+### 5. Start
 
 ```bash
 cd ~/llm/2servelocalllm/serve
-cargo run --release
+./target/release/llm-serve
 ```
 
-You'll see:
-```
-starting llm-serve, llama_enabled=true
-spawning llama-server...
-waiting for llama-server health check...
-llama-server is ready
-listening on 0.0.0.0:3000
-```
+Wait for `listening on 0.0.0.0:11434` — the stack is ready.
 
-That's it. llm-serve spawns llama-server, waits until the model is loaded onto GPU, then starts accepting requests on port 3000.
+---
 
-### Add a shell alias (optional)
+## Shell Aliases (Optional)
+
+Add to `~/.bashrc` (Linux) or `~/.zshrc` (macOS):
 
 ```bash
-echo "alias ai-start='cd ~/llm/2servelocalllm/serve && cargo run --release'" >> ~/.bashrc
-source ~/.bashrc
+# Start the full stack (runs the compiled binary directly — no recompilation)
+alias ai-start='cd ~/llm/2servelocalllm/serve && ./target/release/llm-serve'
+
+# Stop the full stack
+alias ai-stop='pkill -f llm-serve; echo Stack stopped.'
+
+# Claude Code → local model (free, private, routed through llm-serve)
+alias claude-local='ANTHROPIC_BASE_URL="http://localhost:11434" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
+
+# Claude Code → Anthropic cloud (requires API key)
+alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
 ```
 
-Then just: `ai-start`
+Then reload: `source ~/.bashrc` (or `source ~/.zshrc`)
+
+> **Note:** `setup.sh` offers to add these automatically. If you've already run setup, they may already be in your shell config.
+
+### Daily workflow
+
+```bash
+# Terminal 1: start the stack
+ai-start
+# Wait for "listening on 0.0.0.0:11434"
+
+# Terminal 2: use Claude Code with your local model
+cd ~/your-project
+claude-local
+```
+
+---
+
+## Docker Setup (No Rust Install Required)
+
+Docker builds llm-serve inside the container, so you don't need Rust on the host. You still need llama-server and model files on the host (mounted in).
+
+### Prerequisites
+
+| Dependency | Required for |
+|-----------|-------------|
+| **Docker + Docker Compose** | Building and running the container |
+| **NVIDIA Container Toolkit** | GPU passthrough (Linux only) — [install guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) |
+
+> **macOS note:** Docker on macOS cannot pass through Metal GPU access. For macOS with Apple Silicon, use the native setup above instead of Docker.
+
+### 1. Update docker-compose.yml
+
+Edit `docker-compose.yml` with your actual host paths:
+
+```yaml
+services:
+  llm-serve:
+    build:
+      context: ./serve
+      dockerfile: Dockerfile
+    ports:
+      - "11434:11434"
+    volumes:
+      # Mount the llama-server binary from the host
+      - /home/you/llm/2servelocalllm/llama.cpp/build/bin:/llama/bin:ro
+      # Mount model files from the host
+      - /home/you/llm/2servelocalllm/models:/models:ro
+    environment:
+      - APP__SERVER__PORT=11434
+      - APP__LLAMA__ENABLED=true
+      - APP__LLAMA__BINARY=/llama/bin/llama-server
+      - APP__LLAMA__MODEL=/models/qwen35-27b-q8.gguf
+    # NVIDIA GPU passthrough (Linux only):
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+```
+
+> **Important:** Mount the entire `bin/` directory (not just the binary) so that shared libraries like `libmtmd.so` are available next to `llama-server`.
+
+### 2. Build and run
+
+```bash
+cd ~/llm/2servelocalllm
+docker compose up --build
+```
+
+### 3. Stop
+
+```bash
+docker compose down
+```
 
 ---
 
 ## Using It
 
+### Health check
+
+```bash
+curl http://localhost:11434/health
+```
+
 ### Basic generation
 
 ```bash
-curl -X POST http://localhost:3000/v1/generate \
+curl -X POST http://localhost:11434/v1/generate \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Explain what a hash table is in one paragraph.",
@@ -142,27 +261,10 @@ curl -X POST http://localhost:3000/v1/generate \
   }'
 ```
 
-Response:
-```json
-{
-  "id": "req_abc123",
-  "output": "A hash table is...",
-  "model": "qwen35-distilled",
-  "provider": "local-qwen",
-  "latency_ms": 1523,
-  "usage": { "input_tokens": 12, "output_tokens": 87 },
-  "cached": false,
-  "routing": {
-    "matched_rule": "default",
-    "provider_name": "local-qwen"
-  }
-}
-```
-
 ### Chat-style messages
 
 ```bash
-curl -X POST http://localhost:3000/v1/generate \
+curl -X POST http://localhost:11434/v1/generate \
   -H "Content-Type: application/json" \
   -d '{
     "messages": [
@@ -176,7 +278,7 @@ curl -X POST http://localhost:3000/v1/generate \
 ### Streaming (SSE)
 
 ```bash
-curl -N -X POST http://localhost:3000/v1/generate \
+curl -N -X POST http://localhost:11434/v1/generate \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Write a short poem about programming.",
@@ -185,76 +287,19 @@ curl -N -X POST http://localhost:3000/v1/generate \
   }'
 ```
 
-Returns server-sent events:
-```
-data: {"delta":"A ","done":false}
-data: {"delta":"loop ","done":false}
-data: {"delta":"that ","done":false}
-...
-data: {"delta":"","done":true}
-```
-
-### Specify a task (for routing)
+### Anthropic Messages API (used by Claude Code)
 
 ```bash
-curl -X POST http://localhost:3000/v1/generate \
+curl -X POST http://localhost:11434/v1/messages \
   -H "Content-Type: application/json" \
+  -H "x-api-key: local-dev" \
+  -H "anthropic-version: 2023-06-01" \
   -d '{
-    "prompt": "Fix this Python bug: ...",
-    "task": "code",
-    "max_tokens": 500
+    "model": "qwen35-distilled",
+    "max_tokens": 100,
+    "messages": [{"role": "user", "content": "Hello!"}]
   }'
 ```
-
-The routing engine uses the `task` field to decide which provider handles the request (configurable in config.toml).
-
----
-
-## Using with Claude Code
-
-llm-serve is a drop-in replacement for the Anthropic API. Claude Code talks to it natively via `POST /v1/messages`.
-
-### .bashrc aliases
-
-```bash
-# Start the full stack (one command)
-alias ai-start='cd ~/llm/2servelocalllm/serve && cargo run --release'
-
-# Stop the full stack
-alias ai-stop='pkill -f llm-serve; echo Stack stopped.'
-
-# Claude Code → local model (free, private, routed through llm-serve)
-alias claude-local='ANTHROPIC_BASE_URL="http://localhost:3000" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
-
-# Claude Code → Anthropic cloud (requires API key)
-alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
-```
-
-Add these to your `~/.bashrc`:
-
-```bash
-cat >> ~/.bashrc << 'EOF'
-alias ai-start='cd ~/llm/2servelocalllm/serve && cargo run --release'
-alias ai-stop='pkill -f llm-serve; echo Stack stopped.'
-alias claude-local='ANTHROPIC_BASE_URL="http://localhost:3000" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
-alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
-EOF
-source ~/.bashrc
-```
-
-### Daily workflow
-
-```bash
-# Terminal 1: start the stack
-ai-start
-# Wait for "listening on 0.0.0.0:3000"
-
-# Terminal 2: use Claude Code with your local model
-cd ~/your-project
-claude-local
-```
-
-That's it. Claude Code sends Anthropic API requests to llm-serve on port 3000, which routes them through the serving layer to llama-server on port 8080.
 
 ---
 
@@ -275,51 +320,18 @@ That's it. Claude Code sends Anthropic API requests to llm-serve on port 3000, w
 
 ## Monitoring
 
-### Health check
-
-```bash
-curl http://localhost:3000/health
-```
-
 ### View metrics
 
 ```bash
-curl http://localhost:3000/metrics
-```
-
-Shows Prometheus-format metrics:
-```
-llm_requests_total{provider="local-qwen",task="default",status="success"} 42
-llm_request_duration_seconds{provider="local-qwen"} ...
-llm_tokens_total{direction="input",provider="local-qwen"} 1234
-llm_tokens_total{direction="output",provider="local-qwen"} 5678
-llm_cache_hits_total 7
-llm_cache_misses_total 35
+curl http://localhost:11434/metrics
 ```
 
 ### Check GPU usage
 
 ```bash
-nvidia-smi
-```
-
----
-
-## Evaluation System
-
-After generating responses, you can score them to track which models/providers perform best:
-
-```bash
-# Submit a quality score (0.0 to 1.0) for a response
-curl -X POST http://localhost:3000/v1/evaluate \
-  -H "Content-Type: application/json" \
-  -d '{"id": "req_abc123", "score": 0.9}'
-
-# View aggregated stats
-curl http://localhost:3000/v1/eval/stats
-
-# Find best provider for a task type
-curl "http://localhost:3000/v1/eval/best?task=code"
+nvidia-smi          # Linux
+# or
+sudo powermetrics --samplers gpu_power -i 1000  # macOS (Apple Silicon)
 ```
 
 ---
@@ -349,69 +361,15 @@ llm-serve handles graceful shutdown:
 3. Kills the llama-server child process
 4. Exits
 
-Verify everything stopped:
-```bash
-ps aux | grep -E "llm-serve|llama-server"
-```
-
 ### Force kill if needed
 
 ```bash
 pkill -f llm-serve        # this also kills the child llama-server
 # or by port:
-sudo fuser -k 3000/tcp
-sudo fuser -k 8080/tcp
-```
-
-### Shell alias for stopping
-
-```bash
-echo "alias ai-stop='pkill -f llm-serve; echo Stack stopped.'" >> ~/.bashrc
-source ~/.bashrc
-```
-
----
-
-## Docker Deployment (No Rust Install Required)
-
-If you don't want to install Rust on the deployment machine:
-
-### Build the image (on dev machine or anywhere with Docker)
-
-```bash
-cd ~/llm/2servelocalllm
-docker compose build
-```
-
-### Run on the deployment machine
-
-Edit `docker-compose.yml` to set your actual paths:
-
-```yaml
-volumes:
-  - /home/you/llm/llama.cpp/build/bin/llama-server:/llama/llama-server:ro
-  - /home/you/llm/models:/models:ro
-environment:
-  - APP__LLAMA__ENABLED=true
-  - APP__LLAMA__BINARY=/llama/llama-server
-  - APP__LLAMA__MODEL=/models/qwen35-27b-q8.gguf
-```
-
-For GPU access, uncomment the deploy section in `docker-compose.yml`:
-
-```yaml
-deploy:
-  resources:
-    reservations:
-      devices:
-        - driver: nvidia
-          count: all
-          capabilities: [gpu]
-```
-
-Then:
-```bash
-docker compose up
+sudo fuser -k 11434/tcp   # Linux
+sudo fuser -k 8080/tcp    # Linux
+lsof -ti:11434 | xargs kill  # macOS
+lsof -ti:8080 | xargs kill   # macOS
 ```
 
 ---
@@ -422,8 +380,8 @@ All config lives in `serve/config.toml`. Every value can be overridden via envir
 
 | Config key | Env override | Default | Purpose |
 |-----------|-------------|---------|---------|
-| `server.port` | `APP__SERVER__PORT` | 3000 | API port |
-| `llama.enabled` | `APP__LLAMA__ENABLED` | false | Spawn llama-server |
+| `server.port` | `APP__SERVER__PORT` | 11434 | API port |
+| `llama.enabled` | `APP__LLAMA__ENABLED` | true | Spawn llama-server |
 | `llama.binary` | `APP__LLAMA__BINARY` | (see config) | Path to llama-server |
 | `llama.model` | `APP__LLAMA__MODEL` | (see config) | Path to model file |
 | `llama.gpu_layers` | `APP__LLAMA__GPU_LAYERS` | 99 | Layers to offload to GPU |
@@ -441,7 +399,7 @@ All config lives in `serve/config.toml`. Every value can be overridden via envir
 
 | Port | Service | Exposed? |
 |------|---------|----------|
-| 3000 | llm-serve (your API) | Yes — this is what apps talk to |
+| 11434 | llm-serve (your API) | Yes — this is what apps talk to |
 | 8080 | llama-server (inference) | No — managed internally by llm-serve |
 
 ---
@@ -452,7 +410,7 @@ All config lives in `serve/config.toml`. Every value can be overridden via envir
 
 Check the `llama.binary` path in config.toml points to a valid llama-server binary:
 ```bash
-ls -la ./llama.cpp/build/bin/llama-server
+ls -la ../llama.cpp/build/bin/llama-server
 ```
 If not built, build llama.cpp first (see setup).
 
@@ -466,12 +424,24 @@ health_check_timeout_secs = 120
 
 Or check that the model file exists and the GPU has enough VRAM.
 
-### "address already in use" on port 3000 or 8080
+### "address already in use" on port 11434 or 8080
 
 Previous instance didn't shut down cleanly:
 ```bash
-sudo fuser -k 3000/tcp
+# Linux
+sudo fuser -k 11434/tcp
 sudo fuser -k 8080/tcp
+
+# macOS
+lsof -ti:11434 | xargs kill
+lsof -ti:8080 | xargs kill
+```
+
+### "cannot open shared object file: libmtmd.so" (Linux)
+
+This is handled automatically by llm-serve (it sets `LD_LIBRARY_PATH` to the binary's directory). If you're running llama-server manually, set it yourself:
+```bash
+export LD_LIBRARY_PATH=/path/to/llama.cpp/build/bin:$LD_LIBRARY_PATH
 ```
 
 ### Slow inference (< 20 tok/s)
@@ -493,16 +463,22 @@ Then restart: `ai-start`
 
 ## Updating llama.cpp
 
+**Linux (CUDA):**
 ```bash
 cd ~/llm/2servelocalllm/llama.cpp
 git pull
 rm -rf build
-cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build --config Release -j$(nproc)
 ```
 
+**macOS (Metal):**
+```bash
+cd ~/llm/2servelocalllm/llama.cpp
+git pull
+rm -rf build
+cmake -B build -DGGML_METAL=ON
+cmake --build build --config Release -j$(sysctl -n hw.ncpu)
+```
+
 No changes needed to llm-serve — it just calls the binary.
-
----
-
-*Setup: WSL2 2.7.0+, Ubuntu, CUDA 12.8, Rust 1.94+, llama.cpp (latest), RTX 5090 32GB*

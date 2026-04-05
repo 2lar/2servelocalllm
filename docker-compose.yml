@@ -4,23 +4,23 @@ services:
       context: ./serve
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
+      - "11434:11434"
     volumes:
-      # Mount the llama-server binary from the host
-      # Replace left side with the actual host path to llama-server binary
-      - /path/to/llama.cpp/build/bin/llama-server:/llama/llama-server:ro
+      # Mount the llama-server bin directory (includes shared libs like libmtmd.so)
+      # Replace left side with the actual host path
+      - ./llama.cpp/build/bin:/llama/bin:ro
       # Mount model files from the host
-      # Replace left side with the actual host path to the model file
-      - /path/to/models:/models:ro
+      - ./models:/models:ro
     environment:
+      - APP__SERVER__PORT=11434
       - APP__LLAMA__ENABLED=true
-      - APP__LLAMA__BINARY=/llama/llama-server
-      - APP__LLAMA__MODEL=/models/model.gguf
-    # Uncomment below for NVIDIA GPU passthrough:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
+      - APP__LLAMA__BINARY=/llama/bin/llama-server
+      - APP__LLAMA__MODEL=/models/qwen35-27b-q8.gguf
+    # NVIDIA GPU passthrough (Linux only — requires nvidia-container-toolkit):
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

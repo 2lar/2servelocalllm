@@ -1,0 +1,24 @@
+# llama.cpp internal git directory (we track the source, not its repo metadata)
+llama.cpp/.git/
+
+# llama.cpp build artifacts
+llama.cpp/build/
+
+# Model weights (large binary files)
+models/
+
+# Rust build artifacts
+serve/target/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local settings
+.claude/settings.local.json
