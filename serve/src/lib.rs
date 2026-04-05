@@ -2,6 +2,7 @@ pub mod api;
 pub mod config;
 pub mod error;
 pub mod executor;
+pub mod observability;
 pub mod process;
 pub mod provider;
 pub mod router;

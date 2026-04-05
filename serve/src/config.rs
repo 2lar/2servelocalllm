@@ -11,6 +11,33 @@ pub struct AppConfig {
     pub routing: Option<RoutingConfig>,
     #[serde(default)]
     pub executor: ExecutorConfig,
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ObservabilityConfig {
+    #[serde(default = "default_log_format")]
+    pub log_format: String,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
+}
+
+impl Default for ObservabilityConfig {
+    fn default() -> Self {
+        Self {
+            log_format: default_log_format(),
+            log_level: default_log_level(),
+        }
+    }
+}
+
+fn default_log_format() -> String {
+    "json".to_string()
+}
+
+fn default_log_level() -> String {
+    "info".to_string()
 }
 
 #[derive(Debug, Deserialize, Clone)]

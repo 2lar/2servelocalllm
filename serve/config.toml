@@ -19,6 +19,10 @@ url = "http://localhost:8080"
 model = "qwen35-distilled"
 timeout_secs = 120
 
+[observability]
+log_format = "json"
+log_level = "info"
+
 [executor]
 timeout_secs = 120
 

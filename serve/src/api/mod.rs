@@ -1,3 +1,4 @@
+pub mod middleware;
 pub mod routes;
 pub mod types;
 
@@ -5,8 +6,8 @@ use std::sync::Arc;
 
 use axum::routing::{get, post};
 use axum::Router;
+use metrics_exporter_prometheus::PrometheusHandle;
 use tower_http::cors::CorsLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::config::AppConfig;
 use crate::executor::Executor;
@@ -18,13 +19,15 @@ pub struct AppState {
     pub provider_registry: Arc<ProviderRegistry>,
     pub router: Arc<dyn LlmRouter>,
     pub executor: Arc<Executor>,
+    pub metrics_handle: Option<PrometheusHandle>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/health", get(routes::health))
         .route("/v1/generate", post(routes::generate))
-        .layer(TraceLayer::new_for_http())
+        .route("/metrics", get(routes::metrics))
+        .layer(axum::middleware::from_fn(middleware::request_tracing))
         .layer(CorsLayer::permissive())
         .with_state(state)
 }

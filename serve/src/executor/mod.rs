@@ -1,13 +1,14 @@
 pub mod retry;
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 
 use crate::api::types::{GenerateRequest, GenerateResponse};
 use crate::config::ExecutorConfig;
 use crate::error::ServeError;
+use crate::observability::metrics as obs;
 use crate::provider::registry::ProviderRegistry;
 use crate::provider::ChunkStream;
 use crate::router::RoutingDecision;
@@ -31,11 +32,15 @@ impl Executor {
 
     /// Execute a non-streaming request. Tries the primary provider with retries,
     /// then falls back to each fallback provider (also with retries).
+    #[tracing::instrument(skip(self, request), fields(provider = %decision.provider_name))]
     pub async fn execute(
         &self,
         decision: &RoutingDecision,
         request: &GenerateRequest,
     ) -> Result<GenerateResponse, ServeError> {
+        let task = request.task.as_deref().unwrap_or("default");
+        let start = Instant::now();
+
         // Build the ordered list of providers to try: primary, then fallbacks.
         let mut providers_to_try = vec![&decision.provider_name];
         for fallback in &decision.fallbacks {
@@ -49,7 +54,17 @@ impl Executor {
                 .try_provider_with_retries(provider_name, request)
                 .await
             {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    let duration = start.elapsed();
+                    obs::record_request(provider_name, task, "success");
+                    obs::record_latency(provider_name, duration);
+                    obs::record_tokens(
+                        provider_name,
+                        response.usage.input_tokens,
+                        response.usage.output_tokens,
+                    );
+                    return Ok(response);
+                }
                 Err(err) => {
                     warn!(
                         provider = %provider_name,
@@ -60,6 +75,11 @@ impl Executor {
                 }
             }
         }
+
+        // All providers failed — record the error against the primary provider.
+        let duration = start.elapsed();
+        obs::record_request(&decision.provider_name, task, "error");
+        obs::record_latency(&decision.provider_name, duration);
 
         Err(last_error)
     }

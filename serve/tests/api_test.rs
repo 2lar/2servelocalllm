@@ -7,7 +7,8 @@ use tower::ServiceExt;
 
 use llm_serve::api::{build_router, AppState};
 use llm_serve::config::{
-    AppConfig, ExecutorConfig, LlamaConfig, RoutingConfig, RoutingRule, ServerConfig,
+    AppConfig, ExecutorConfig, LlamaConfig, ObservabilityConfig, RoutingConfig, RoutingRule,
+    ServerConfig,
 };
 use llm_serve::executor::Executor;
 use llm_serve::provider::mock::MockProvider;
@@ -43,6 +44,7 @@ fn test_config() -> AppConfig {
             }],
         }),
         executor: ExecutorConfig::default(),
+        observability: ObservabilityConfig::default(),
     }
 }
 
@@ -63,6 +65,7 @@ fn test_state() -> Arc<AppState> {
         provider_registry: registry,
         router: Arc::new(RuleBasedRouter::new(rules)),
         executor,
+        metrics_handle: None,
     })
 }
 
@@ -313,6 +316,7 @@ async fn routing_selects_correct_provider_by_task() {
         provider_registry: registry,
         router: Arc::new(RuleBasedRouter::new(rules)),
         executor,
+        metrics_handle: None,
     });
 
     let app = build_router(state);
@@ -342,4 +346,76 @@ async fn routing_selects_correct_provider_by_task() {
         .as_str()
         .unwrap()
         .contains("code-tasks"));
+}
+
+#[tokio::test]
+async fn metrics_endpoint_returns_prometheus_text() {
+    // Use a state with metrics_handle = None. The endpoint should still respond
+    // (with a 503 in this case, since no recorder is installed in tests).
+    let app = build_router(test_state());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Without a PrometheusHandle, we get 503.
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn metrics_endpoint_with_handle_returns_200() {
+    use metrics_exporter_prometheus::PrometheusBuilder;
+
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .expect("failed to install test recorder");
+
+    // Record a metric so the output is non-empty.
+    llm_serve::observability::metrics::record_request("test-provider", "code", "success");
+
+    let mut registry = ProviderRegistry::new();
+    registry.register(
+        "mock".to_string(),
+        Arc::new(MockProvider::new(Duration::from_millis(0))),
+    );
+
+    let config = test_config();
+    let rules = config.routing.as_ref().unwrap().rules.clone();
+    let registry = Arc::new(registry);
+    let executor = Arc::new(Executor::new(Arc::clone(&registry), &config.executor));
+
+    let state = Arc::new(AppState {
+        config: Arc::new(config),
+        provider_registry: registry,
+        router: Arc::new(RuleBasedRouter::new(rules)),
+        executor,
+        metrics_handle: Some(handle),
+    });
+
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(resp.into_body(), 16384).await.unwrap();
+    let text = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        text.contains("llm_requests_total"),
+        "metrics output should contain llm_requests_total, got: {text}"
+    );
 }

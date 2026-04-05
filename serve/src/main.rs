@@ -2,11 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::signal;
-use tracing_subscriber::EnvFilter;
 
 use llm_serve::api::{build_router, AppState};
 use llm_serve::config::load_config;
 use llm_serve::executor::Executor;
+use llm_serve::observability::logging::init_tracing;
+use llm_serve::observability::metrics::init_metrics;
 use llm_serve::process::ProcessManager;
 use llm_serve::provider::local::LocalProvider;
 use llm_serve::provider::mock::MockProvider;
@@ -15,13 +16,10 @@ use llm_serve::router::rule_based::RuleBasedRouter;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let config = load_config().expect("failed to load config");
+
+    init_tracing(&config.observability.log_format, &config.observability.log_level);
+    let metrics_handle = init_metrics();
     tracing::info!(
         host = %config.server.host,
         port = config.server.port,
@@ -70,6 +68,7 @@ async fn main() {
         provider_registry: registry,
         router,
         executor,
+        metrics_handle: Some(metrics_handle),
     });
 
     let app = build_router(state);

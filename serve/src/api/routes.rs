@@ -19,6 +19,27 @@ pub async fn health() -> impl IntoResponse {
     Json(json!({"status": "ok"}))
 }
 
+pub async fn metrics(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    match &state.metrics_handle {
+        Some(handle) => {
+            let body = handle.render();
+            (
+                axum::http::StatusCode::OK,
+                [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+                body,
+            )
+        }
+        None => (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+            "metrics not available".to_string(),
+        ),
+    }
+}
+
+#[tracing::instrument(skip(state, req), fields(task = req.task.as_deref().unwrap_or("default")))]
 pub async fn generate(
     State(state): State<Arc<AppState>>,
     Json(req): Json<GenerateRequest>,
