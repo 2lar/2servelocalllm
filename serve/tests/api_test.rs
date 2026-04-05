@@ -34,6 +34,8 @@ fn test_config() -> AppConfig {
         },
         providers: std::collections::HashMap::new(),
         routing: Some(RoutingConfig {
+            strategy: "rule_based".to_string(),
+            default_provider: None,
             rules: vec![RoutingRule {
                 name: "default".to_string(),
                 task: None,
@@ -42,6 +44,7 @@ fn test_config() -> AppConfig {
                 provider: "mock".to_string(),
                 fallbacks: None,
             }],
+            advanced: None,
         }),
         executor: ExecutorConfig::default(),
         observability: ObservabilityConfig::default(),

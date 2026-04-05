@@ -1010,6 +1010,7 @@ dependencies = [
  "lru",
  "metrics",
  "metrics-exporter-prometheus",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

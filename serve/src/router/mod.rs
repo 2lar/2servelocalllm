@@ -1,3 +1,4 @@
+pub mod advanced;
 pub mod rule_based;
 
 use async_trait::async_trait;

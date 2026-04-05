@@ -156,7 +156,49 @@ pub struct ProviderConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct RoutingConfig {
+    #[serde(default = "default_routing_strategy")]
+    pub strategy: String,
+    #[serde(default)]
+    pub default_provider: Option<String>,
+    #[serde(default)]
     pub rules: Vec<RoutingRule>,
+    #[serde(default)]
+    pub advanced: Option<AdvancedRoutingConfig>,
+}
+
+fn default_routing_strategy() -> String {
+    "rule_based".to_string()
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct AdvancedRoutingConfig {
+    #[serde(default)]
+    pub length_rules: Vec<LengthRule>,
+    #[serde(default)]
+    pub keyword_rules: Vec<KeywordRule>,
+    #[serde(default)]
+    pub load_balance: Option<LoadBalanceConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LengthRule {
+    pub max_chars: usize,
+    pub provider: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct KeywordRule {
+    pub pattern: String,
+    pub provider: String,
+    #[serde(default)]
+    pub fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct LoadBalanceConfig {
+    pub providers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]

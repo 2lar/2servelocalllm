@@ -14,7 +14,9 @@ use llm_serve::process::ProcessManager;
 use llm_serve::provider::local::LocalProvider;
 use llm_serve::provider::mock::MockProvider;
 use llm_serve::provider::registry::ProviderRegistry;
+use llm_serve::router::advanced::AdvancedRouter;
 use llm_serve::router::rule_based::RuleBasedRouter;
+use llm_serve::router::Router;
 
 #[tokio::main]
 async fn main() {
@@ -52,13 +54,36 @@ async fn main() {
         registry.register("mock".to_string(), Arc::new(mock));
     }
 
-    let routing_rules = config
+    let router: Arc<dyn Router> = match config
         .routing
         .as_ref()
-        .map(|r| r.rules.clone())
-        .unwrap_or_default();
-
-    let router = Arc::new(RuleBasedRouter::new(routing_rules));
+        .map(|r| r.strategy.as_str())
+    {
+        Some("advanced") => {
+            let routing_config = config.routing.as_ref().unwrap();
+            let default_provider = routing_config
+                .default_provider
+                .clone()
+                .unwrap_or_else(|| "local-qwen".to_string());
+            let advanced_config = routing_config
+                .advanced
+                .as_ref()
+                .expect("routing.advanced config required when strategy = 'advanced'");
+            let router = AdvancedRouter::new(advanced_config, default_provider)
+                .expect("failed to create advanced router");
+            tracing::info!("using advanced router");
+            Arc::new(router)
+        }
+        _ => {
+            let routing_rules = config
+                .routing
+                .as_ref()
+                .map(|r| r.rules.clone())
+                .unwrap_or_default();
+            tracing::info!("using rule-based router");
+            Arc::new(RuleBasedRouter::new(routing_rules))
+        }
+    };
     let registry = Arc::new(registry);
 
     let cache: Option<Arc<dyn Cache>> = if config.cache.enabled {

@@ -36,6 +36,10 @@ max_retries = 2
 initial_backoff_ms = 500
 max_backoff_ms = 5000
 
+[routing]
+strategy = "rule_based"
+default_provider = "local-qwen"
+
 [[routing.rules]]
 name = "code-tasks"
 task = "code"
@@ -49,3 +53,26 @@ provider = "local-qwen"
 [[routing.rules]]
 name = "default"
 provider = "local-qwen"
+
+# To use advanced routing, set strategy = "advanced" and configure below:
+# [routing]
+# strategy = "advanced"
+# default_provider = "local-qwen"
+#
+# [[routing.advanced.length_rules]]
+# max_chars = 500
+# provider = "local-qwen"
+# fallbacks = []
+#
+# [[routing.advanced.length_rules]]
+# max_chars = 5000
+# provider = "local-qwen"
+# fallbacks = []
+#
+# [[routing.advanced.keyword_rules]]
+# pattern = "(?i)(code|debug|function|implement|refactor)"
+# provider = "local-qwen"
+# fallbacks = []
+#
+# [routing.advanced.load_balance]
+# providers = ["local-qwen"]
