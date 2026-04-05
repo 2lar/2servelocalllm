@@ -90,6 +90,51 @@ Then restart with `ai-start`. No rebuild needed.
 
 > **Tip:** Choose a quantization that fits your VRAM. Q8_0 gives the best quality but is the largest. Q4_K_M is a good balance of quality and size.
 
+### If a model fails to load: unknown architecture
+
+If you see this error when starting a new model:
+
+```
+llama_model_load: error loading model: error loading model architecture: unknown model architecture: '<name>'
+```
+
+It means your local llama.cpp is too old to support that model family. You need to update it and rebuild.
+
+**Update llama.cpp and rebuild:**
+
+```bash
+cd /path/to/2servelocalllm
+
+# Re-clone the latest llama.cpp
+rm -rf llama.cpp
+git clone https://github.com/ggml-org/llama.cpp.git llama.cpp
+
+# Rebuild (Linux + CUDA)
+cd llama.cpp
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native
+# On WSL2 replace "native" with your GPU's compute capability, e.g. for RTX 5090:
+# cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=120
+cmake --build build --config Release -j$(nproc)
+```
+
+For macOS replace the cmake line with `-DGGML_METAL=ON` and `$(sysctl -n hw.ncpu)`.
+
+> **WSL / `native` fails?** If cmake errors with `Unsupported gpu architecture 'compute_'`, it means CMake couldn't auto-detect your GPU (common in WSL2). Replace `native` with your GPU's compute capability number:
+>
+> | GPU | Value |
+> |-----|-------|
+> | RTX 5090 / 5080 | `120` |
+> | RTX 4090 / 4080 | `89` |
+> | RTX 3090 / 3080 | `86` |
+> | RTX 3070 / 3060 | `86` |
+> | RTX 2080 / 2070 | `75` |
+>
+> Example: `cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89`
+>
+> Not sure which GPU you have? Run `nvidia-smi` to find the model, then look up its compute capability at [developer.nvidia.com/cuda-gpus](https://developer.nvidia.com/cuda-gpus).
+
+After rebuilding, run `ai-start` as normal. This is only needed when a brand-new model family is released — switching between models of the same family (e.g. different Gemma versions) never requires a rebuild.
+
 ---
 
 ## Manual Setup (No Docker)
@@ -121,7 +166,7 @@ cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=native
 cmake --build build --config Release -j$(nproc)
 ```
 
-> Set `-DCMAKE_CUDA_ARCHITECTURES` to your GPU's compute capability if `native` doesn't work. For example: `120` for RTX 5090, `89` for RTX 4090, `86` for RTX 3090.
+> If `native` fails (common in WSL2), replace it with your GPU's compute capability — e.g. `89` for RTX 4090, `86` for RTX 3090/3080/3070, `75` for RTX 2080. See the note in the **Supported Models** section above for a full table.
 
 **macOS (Metal — Apple Silicon or Intel with AMD GPU):**
 ```bash
