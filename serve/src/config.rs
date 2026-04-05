@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub observability: ObservabilityConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub eval: EvalConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -64,6 +66,31 @@ fn default_cache_max_entries() -> usize {
 
 fn default_cache_ttl_secs() -> u64 {
     3600
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct EvalConfig {
+    #[serde(default = "default_eval_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_eval_max_records")]
+    pub max_records: usize,
+}
+
+impl Default for EvalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_eval_enabled(),
+            max_records: default_eval_max_records(),
+        }
+    }
+}
+
+fn default_eval_enabled() -> bool {
+    true
+}
+
+fn default_eval_max_records() -> usize {
+    10000
 }
 
 fn default_log_format() -> String {

@@ -7,6 +7,7 @@ use llm_serve::api::{build_router, AppState};
 use llm_serve::cache::memory::MemoryCache;
 use llm_serve::cache::Cache;
 use llm_serve::config::load_config;
+use llm_serve::eval::store::EvalStore;
 use llm_serve::executor::Executor;
 use llm_serve::observability::logging::init_tracing;
 use llm_serve::observability::metrics::init_metrics;
@@ -98,6 +99,17 @@ async fn main() {
         None
     };
 
+    let eval_store: Option<Arc<EvalStore>> = if config.eval.enabled {
+        tracing::info!(
+            max_records = config.eval.max_records,
+            "eval store enabled"
+        );
+        Some(Arc::new(EvalStore::new(config.eval.max_records)))
+    } else {
+        tracing::info!("eval store disabled");
+        None
+    };
+
     let mut executor = Executor::new(Arc::clone(&registry), &config.executor);
     if let Some(ref cache) = cache {
         executor = executor.with_cache(Arc::clone(cache));
@@ -111,6 +123,7 @@ async fn main() {
         executor,
         metrics_handle: Some(metrics_handle),
         cache,
+        eval_store,
     });
 
     let app = build_router(state);

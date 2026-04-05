@@ -23,6 +23,7 @@ metrics-exporter-prometheus = "0.18"
 sha2 = "0.10"
 lru = "0.12"
 regex = "1"
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 wiremock = "0.6"

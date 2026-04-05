@@ -7,9 +7,10 @@ use tower::ServiceExt;
 
 use llm_serve::api::{build_router, AppState};
 use llm_serve::config::{
-    AppConfig, CacheConfig, ExecutorConfig, LlamaConfig, ObservabilityConfig, RoutingConfig,
-    RoutingRule, ServerConfig,
+    AppConfig, CacheConfig, EvalConfig, ExecutorConfig, LlamaConfig, ObservabilityConfig,
+    RoutingConfig, RoutingRule, ServerConfig,
 };
+use llm_serve::eval::store::EvalStore;
 use llm_serve::executor::Executor;
 use llm_serve::provider::mock::MockProvider;
 use llm_serve::provider::registry::ProviderRegistry;
@@ -49,6 +50,7 @@ fn test_config() -> AppConfig {
         executor: ExecutorConfig::default(),
         observability: ObservabilityConfig::default(),
         cache: CacheConfig::default(),
+        eval: EvalConfig::default(),
     }
 }
 
@@ -71,6 +73,31 @@ fn test_state() -> Arc<AppState> {
         executor,
         metrics_handle: None,
         cache: None,
+        eval_store: None,
+    })
+}
+
+fn test_state_with_eval() -> Arc<AppState> {
+    let mut registry = ProviderRegistry::new();
+    registry.register(
+        "mock".to_string(),
+        Arc::new(MockProvider::new(Duration::from_millis(0))),
+    );
+
+    let config = test_config();
+    let rules = config.routing.as_ref().unwrap().rules.clone();
+    let registry = Arc::new(registry);
+    let executor = Arc::new(Executor::new(Arc::clone(&registry), &config.executor));
+    let eval_store = Arc::new(EvalStore::new(10000));
+
+    Arc::new(AppState {
+        config: Arc::new(config),
+        provider_registry: registry,
+        router: Arc::new(RuleBasedRouter::new(rules)),
+        executor,
+        metrics_handle: None,
+        cache: None,
+        eval_store: Some(eval_store),
     })
 }
 
@@ -323,6 +350,7 @@ async fn routing_selects_correct_provider_by_task() {
         executor,
         metrics_handle: None,
         cache: None,
+        eval_store: None,
     });
 
     let app = build_router(state);
@@ -403,6 +431,7 @@ async fn metrics_endpoint_with_handle_returns_200() {
         executor,
         metrics_handle: Some(handle),
         cache: None,
+        eval_store: None,
     });
 
     let app = build_router(state);
@@ -455,6 +484,7 @@ async fn cached_response_returns_cached_true() {
         executor,
         metrics_handle: None,
         cache: Some(cache),
+        eval_store: None,
     });
 
     let body_json = serde_json::json!({
@@ -500,4 +530,261 @@ async fn cached_response_returns_cached_true() {
     let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["cached"], true);
+}
+
+#[tokio::test]
+async fn generate_then_eval_stats_shows_request() {
+    let state = test_state_with_eval();
+
+    // Generate a request so it gets recorded in the eval store.
+    let app = build_router(state.clone());
+    let body = serde_json::json!({
+        "prompt": "Hello",
+        "task": "code"
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Now check eval stats.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/eval/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let stats = json["stats"].as_array().unwrap();
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0]["provider"], "mock");
+    assert_eq!(stats[0]["task"], "code");
+    assert_eq!(stats[0]["request_count"], 1);
+}
+
+#[tokio::test]
+async fn evaluate_sets_score_reflected_in_stats() {
+    let state = test_state_with_eval();
+
+    // Generate a request.
+    let app = build_router(state.clone());
+    let body = serde_json::json!({
+        "prompt": "Hello",
+        "task": "code"
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let gen_json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let response_id = gen_json["id"].as_str().unwrap().to_string();
+
+    // Set score via POST /v1/evaluate.
+    let app = build_router(state.clone());
+    let eval_body = serde_json::json!({
+        "id": response_id,
+        "score": 0.85
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/evaluate")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&eval_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Check stats reflect the score.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/eval/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let stats = json["stats"].as_array().unwrap();
+    assert_eq!(stats.len(), 1);
+    assert_eq!(stats[0]["avg_score"], 0.85);
+}
+
+#[tokio::test]
+async fn eval_best_returns_correct_provider() {
+    let state = test_state_with_eval();
+    let eval_store = state.eval_store.as_ref().unwrap();
+
+    // Manually insert records with scores to control provider names.
+    use llm_serve::api::types::{GenerateRequest, GenerateResponse, Usage};
+    use llm_serve::eval::EvalRecord;
+
+    let req = GenerateRequest {
+        prompt: Some("test".to_string()),
+        messages: None,
+        task: Some("code".to_string()),
+        max_tokens: None,
+        temperature: None,
+        stream: None,
+        provider: None,
+    };
+
+    let make_resp = |id: &str, provider: &str| GenerateResponse {
+        id: id.to_string(),
+        output: "test".to_string(),
+        model: "test".to_string(),
+        provider: provider.to_string(),
+        latency_ms: 100,
+        usage: Usage { input_tokens: 5, output_tokens: 3 },
+        cached: false,
+        routing: None,
+    };
+
+    eval_store
+        .record(EvalRecord {
+            id: "r1".to_string(),
+            request: req.clone(),
+            response: make_resp("r1", "provider-a"),
+            provider: "provider-a".to_string(),
+            task: Some("code".to_string()),
+            latency_ms: 100,
+            score: Some(0.7),
+            created_at: chrono::Utc::now(),
+        })
+        .await;
+
+    eval_store
+        .record(EvalRecord {
+            id: "r2".to_string(),
+            request: req.clone(),
+            response: make_resp("r2", "provider-b"),
+            provider: "provider-b".to_string(),
+            task: Some("code".to_string()),
+            latency_ms: 100,
+            score: Some(0.95),
+            created_at: chrono::Utc::now(),
+        })
+        .await;
+
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/eval/best?task=code")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["task"], "code");
+    assert_eq!(json["best_provider"], "provider-b");
+}
+
+#[tokio::test]
+async fn evaluate_with_invalid_score_returns_400() {
+    let state = test_state_with_eval();
+
+    let app = build_router(state.clone());
+    let eval_body = serde_json::json!({
+        "id": "some-id",
+        "score": 1.5
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/evaluate")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&eval_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn evaluate_with_negative_score_returns_400() {
+    let state = test_state_with_eval();
+
+    let app = build_router(state.clone());
+    let eval_body = serde_json::json!({
+        "id": "some-id",
+        "score": -0.1
+    });
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/evaluate")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_string(&eval_body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn eval_endpoints_return_error_when_eval_disabled() {
+    let state = test_state(); // eval_store is None
+
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/eval/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }

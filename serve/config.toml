@@ -24,6 +24,10 @@ enabled = true
 max_entries = 1000
 ttl_secs = 3600
 
+[eval]
+enabled = true
+max_records = 10000
+
 [observability]
 log_format = "json"
 log_level = "info"

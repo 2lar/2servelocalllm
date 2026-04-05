@@ -47,3 +47,14 @@ pub struct StreamChunk {
     pub delta: String,
     pub done: bool,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvaluateRequest {
+    pub id: String,
+    pub score: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EvalBestQuery {
+    pub task: String,
+}
