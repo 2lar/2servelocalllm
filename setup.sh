@@ -69,6 +69,25 @@ case "$PLATFORM" in
     macos) install_macos_deps ;;
 esac
 
+# Check for CUDA on Linux (needed for GPU acceleration)
+if [ "$PLATFORM" = "linux" ]; then
+    if ! command -v nvcc >/dev/null 2>&1 && ! [ -d /usr/local/cuda ]; then
+        warn "CUDA toolkit not found!"
+        warn "Without CUDA, llama.cpp will build CPU-only (much slower inference)."
+        warn "To install CUDA: https://developer.nvidia.com/cuda-downloads"
+        warn "After installing, you may need to reboot and re-run this script."
+        echo ""
+        echo "Continue without CUDA (CPU-only)? [y/N]"
+        read -r answer
+        if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+            error "Install CUDA first, then re-run ./setup.sh"
+            exit 1
+        fi
+    else
+        info "CUDA toolkit found"
+    fi
+fi
+
 # ──────────────────────────────────────────────
 # Step 2: Rust toolchain
 # ──────────────────────────────────────────────
@@ -143,8 +162,13 @@ mkdir -p "$MODEL_DIR"
 MODEL_COUNT=$(find "$MODEL_DIR" -maxdepth 1 -name "*.gguf" 2>/dev/null | wc -l)
 if [ "$MODEL_COUNT" -eq 0 ]; then
     warn "No .gguf model found in $MODEL_DIR"
-    warn "Download a model and place it there. For example:"
+    warn "Download any GGUF model and place it there. Any model llama.cpp supports works:"
+    warn "  Qwen, Gemma, DeepSeek, Llama, Mistral, Phi, etc."
+    warn ""
+    warn "Examples:"
     warn "  huggingface-cli download unsloth/Qwen3.5-27B-GGUF qwen35-27b-q8.gguf --local-dir $MODEL_DIR"
+    warn "  huggingface-cli download bartowski/gemma-3-27b-it-GGUF gemma-3-27b-it-Q8_0.gguf --local-dir $MODEL_DIR"
+    warn "  huggingface-cli download bartowski/DeepSeek-R1-0528-Qwen3-8B-GGUF DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf --local-dir $MODEL_DIR"
     warn ""
     warn "Then update serve/config.toml with the model filename:"
     warn "  model = \"../models/your-model.gguf\""

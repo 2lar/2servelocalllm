@@ -66,6 +66,32 @@ After setup, place a GGUF model in `models/` and update the filename in `serve/c
 
 ---
 
+## Supported Models
+
+Any model in GGUF format that llama.cpp supports will work. This includes:
+
+| Model Family | Example |
+|-------------|---------|
+| **Qwen** | `qwen35-27b-q8.gguf` |
+| **Gemma** | `gemma-3-27b-it-Q8_0.gguf` |
+| **DeepSeek** | `DeepSeek-R1-0528-Qwen3-8B-Q8_0.gguf` |
+| **Llama** | `Meta-Llama-3.1-8B-Instruct-Q8_0.gguf` |
+| **Mistral** | `Mistral-7B-Instruct-v0.3-Q8_0.gguf` |
+| **Phi** | `Phi-4-mini-instruct-Q8_0.gguf` |
+
+To switch models, update the path in `serve/config.toml`:
+
+```toml
+[llama]
+model = "../models/your-model-file.gguf"
+```
+
+Then restart with `ai-start`. No rebuild needed.
+
+> **Tip:** Choose a quantization that fits your VRAM. Q8_0 gives the best quality but is the largest. Q4_K_M is a good balance of quality and size.
+
+---
+
 ## Manual Setup (No Docker)
 
 If you prefer to do each step yourself:
