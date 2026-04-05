@@ -175,8 +175,8 @@ Wait for `listening on 0.0.0.0:11434` — the stack is ready.
 Add to `~/.bashrc` (Linux) or `~/.zshrc` (macOS):
 
 ```bash
-# Start the full stack (runs the compiled binary directly — no recompilation)
-alias ai-start='cd ~/llm/2servelocalllm/serve && ./target/release/llm-serve'
+# Start the full stack (picks model if you have more than one)
+alias ai-start='~/2servelocalllm/scripts/ai-start.sh'
 
 # Stop the full stack
 alias ai-stop='pkill -f llm-serve; echo Stack stopped.'

@@ -198,7 +198,7 @@ if ! grep -q "ai-start" "$SHELL_RC" 2>/dev/null; then
         cat >> "$SHELL_RC" << EOF
 
 # llm-serve aliases
-alias ai-start='cd $SERVE_DIR && $BINARY'
+alias ai-start='$REPO_DIR/scripts/ai-start.sh'
 alias ai-stop='pkill -f llm-serve; echo "Stack stopped."'
 alias claude-local='ANTHROPIC_BASE_URL="http://localhost:11434" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
 alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
