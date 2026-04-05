@@ -6,6 +6,8 @@ use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 use crate::api::types::{GenerateRequest, GenerateResponse};
+use crate::cache::metrics as cache_metrics;
+use crate::cache::Cache;
 use crate::config::ExecutorConfig;
 use crate::error::ServeError;
 use crate::observability::metrics as obs;
@@ -19,6 +21,7 @@ pub struct Executor {
     registry: Arc<ProviderRegistry>,
     timeout: Duration,
     retry_policy: RetryPolicy,
+    cache: Option<Arc<dyn Cache>>,
 }
 
 impl Executor {
@@ -27,17 +30,33 @@ impl Executor {
             registry,
             timeout: Duration::from_secs(config.timeout_secs),
             retry_policy: RetryPolicy::from_config(&config.retry),
+            cache: None,
         }
     }
 
-    /// Execute a non-streaming request. Tries the primary provider with retries,
-    /// then falls back to each fallback provider (also with retries).
+    pub fn with_cache(mut self, cache: Arc<dyn Cache>) -> Self {
+        self.cache = Some(cache);
+        self
+    }
+
+    /// Execute a non-streaming request. Checks cache first, then tries the
+    /// primary provider with retries, and falls back to each fallback provider.
     #[tracing::instrument(skip(self, request), fields(provider = %decision.provider_name))]
     pub async fn execute(
         &self,
         decision: &RoutingDecision,
         request: &GenerateRequest,
     ) -> Result<GenerateResponse, ServeError> {
+        // Check cache for non-streaming requests.
+        if let Some(ref cache) = self.cache {
+            if let Some(mut cached_resp) = cache.get(request).await {
+                cached_resp.cached = true;
+                cache_metrics::record_cache_hit();
+                return Ok(cached_resp);
+            }
+            cache_metrics::record_cache_miss();
+        }
+
         let task = request.task.as_deref().unwrap_or("default");
         let start = Instant::now();
 
@@ -54,7 +73,7 @@ impl Executor {
                 .try_provider_with_retries(provider_name, request)
                 .await
             {
-                Ok(response) => {
+                Ok(mut response) => {
                     let duration = start.elapsed();
                     obs::record_request(provider_name, task, "success");
                     obs::record_latency(provider_name, duration);
@@ -63,6 +82,13 @@ impl Executor {
                         response.usage.input_tokens,
                         response.usage.output_tokens,
                     );
+
+                    // Store in cache on success.
+                    if let Some(ref cache) = self.cache {
+                        cache.put(request, &response).await;
+                    }
+
+                    response.cached = false;
                     return Ok(response);
                 }
                 Err(err) => {
@@ -208,7 +234,8 @@ impl Executor {
 mod tests {
     use super::*;
     use crate::api::types::{GenerateRequest, GenerateResponse, Usage};
-    use crate::config::{ExecutorConfig, RetryConfig};
+    use crate::cache::memory::MemoryCache;
+    use crate::config::{CacheConfig, ExecutorConfig, RetryConfig};
     use crate::provider::mock::MockProvider;
     use crate::provider::{ChunkStream, Provider};
 
@@ -568,5 +595,115 @@ mod tests {
             .execute_stream(&decision, &test_request())
             .await;
         assert!(stream.is_ok());
+    }
+
+    /// A provider that counts how many times generate() is called.
+    struct CountingProvider {
+        name: String,
+        call_count: AtomicU32,
+    }
+
+    impl CountingProvider {
+        fn new(name: &str) -> Self {
+            Self {
+                name: name.to_string(),
+                call_count: AtomicU32::new(0),
+            }
+        }
+
+        fn calls(&self) -> u32 {
+            self.call_count.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait]
+    impl Provider for CountingProvider {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn generate(&self, _req: &GenerateRequest) -> Result<GenerateResponse, ServeError> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            Ok(GenerateResponse {
+                id: "counting-id".to_string(),
+                output: "counting response".to_string(),
+                model: "test-model".to_string(),
+                provider: self.name.clone(),
+                latency_ms: 0,
+                usage: Usage {
+                    input_tokens: 5,
+                    output_tokens: 3,
+                },
+                cached: false,
+                routing: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _req: &GenerateRequest,
+        ) -> Result<ChunkStream, ServeError> {
+            Err(ServeError::Internal("not implemented".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn cache_hit_skips_provider_call() {
+        let provider = Arc::new(CountingProvider::new("counting"));
+        let mut registry = ProviderRegistry::new();
+        registry.register("counting".to_string(), provider.clone());
+
+        let cache = Arc::new(MemoryCache::new(&CacheConfig {
+            enabled: true,
+            max_entries: 10,
+            ttl_secs: 3600,
+        }));
+
+        let executor = Executor::new(Arc::new(registry), &fast_config())
+            .with_cache(cache.clone());
+
+        let decision = simple_decision("counting");
+        let req = test_request();
+
+        // First call: cache miss, hits provider.
+        let resp1 = executor.execute(&decision, &req).await.unwrap();
+        assert_eq!(provider.calls(), 1);
+        assert!(!resp1.cached);
+
+        // Second call: cache hit, should NOT call provider.
+        let resp2 = executor.execute(&decision, &req).await.unwrap();
+        assert_eq!(provider.calls(), 1, "provider should not be called on cache hit");
+        assert!(resp2.cached);
+        assert_eq!(resp2.output, "counting response");
+    }
+
+    #[tokio::test]
+    async fn cache_miss_calls_provider_and_stores_result() {
+        let mut registry = ProviderRegistry::new();
+        registry.register(
+            "mock".to_string(),
+            Arc::new(MockProvider::new(Duration::from_millis(0))),
+        );
+
+        let cache = Arc::new(MemoryCache::new(&CacheConfig {
+            enabled: true,
+            max_entries: 10,
+            ttl_secs: 3600,
+        }));
+
+        let executor = Executor::new(Arc::new(registry), &fast_config())
+            .with_cache(cache.clone());
+
+        let decision = simple_decision("mock");
+        let req = test_request();
+
+        // First call: cache miss.
+        let resp = executor.execute(&decision, &req).await.unwrap();
+        assert!(!resp.cached);
+
+        // Verify the response was stored in the cache.
+        let cached = cache.get(&req).await;
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().output, "This is a mock response.");
     }
 }

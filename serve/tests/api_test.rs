@@ -7,8 +7,8 @@ use tower::ServiceExt;
 
 use llm_serve::api::{build_router, AppState};
 use llm_serve::config::{
-    AppConfig, ExecutorConfig, LlamaConfig, ObservabilityConfig, RoutingConfig, RoutingRule,
-    ServerConfig,
+    AppConfig, CacheConfig, ExecutorConfig, LlamaConfig, ObservabilityConfig, RoutingConfig,
+    RoutingRule, ServerConfig,
 };
 use llm_serve::executor::Executor;
 use llm_serve::provider::mock::MockProvider;
@@ -45,6 +45,7 @@ fn test_config() -> AppConfig {
         }),
         executor: ExecutorConfig::default(),
         observability: ObservabilityConfig::default(),
+        cache: CacheConfig::default(),
     }
 }
 
@@ -66,6 +67,7 @@ fn test_state() -> Arc<AppState> {
         router: Arc::new(RuleBasedRouter::new(rules)),
         executor,
         metrics_handle: None,
+        cache: None,
     })
 }
 
@@ -317,6 +319,7 @@ async fn routing_selects_correct_provider_by_task() {
         router: Arc::new(RuleBasedRouter::new(rules)),
         executor,
         metrics_handle: None,
+        cache: None,
     });
 
     let app = build_router(state);
@@ -396,6 +399,7 @@ async fn metrics_endpoint_with_handle_returns_200() {
         router: Arc::new(RuleBasedRouter::new(rules)),
         executor,
         metrics_handle: Some(handle),
+        cache: None,
     });
 
     let app = build_router(state);
@@ -418,4 +422,79 @@ async fn metrics_endpoint_with_handle_returns_200() {
         text.contains("llm_requests_total"),
         "metrics output should contain llm_requests_total, got: {text}"
     );
+}
+
+#[tokio::test]
+async fn cached_response_returns_cached_true() {
+    use llm_serve::cache::memory::MemoryCache;
+    use llm_serve::cache::Cache;
+
+    let mut registry = ProviderRegistry::new();
+    registry.register(
+        "mock".to_string(),
+        Arc::new(MockProvider::new(Duration::from_millis(0))),
+    );
+
+    let config = test_config();
+    let rules = config.routing.as_ref().unwrap().rules.clone();
+    let registry = Arc::new(registry);
+
+    let cache: Arc<dyn Cache> = Arc::new(MemoryCache::new(&config.cache));
+    let executor = Arc::new(
+        Executor::new(Arc::clone(&registry), &config.executor)
+            .with_cache(Arc::clone(&cache)),
+    );
+
+    let state = Arc::new(AppState {
+        config: Arc::new(config),
+        provider_registry: registry,
+        router: Arc::new(RuleBasedRouter::new(rules)),
+        executor,
+        metrics_handle: None,
+        cache: Some(cache),
+    });
+
+    let body_json = serde_json::json!({
+        "prompt": "Hello",
+        "max_tokens": 100
+    });
+    let body_str = serde_json::to_string(&body_json).unwrap();
+
+    // First request: cache miss, provider is called.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(body_str.clone()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["cached"], false);
+
+    // Second request: cache hit, should return cached: true.
+    let app = build_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/generate")
+                .header("content-type", "application/json")
+                .body(Body::from(body_str))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), 4096).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["cached"], true);
 }

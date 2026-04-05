@@ -19,6 +19,11 @@ url = "http://localhost:8080"
 model = "qwen35-distilled"
 timeout_secs = 120
 
+[cache]
+enabled = true
+max_entries = 1000
+ttl_secs = 3600
+
 [observability]
 log_format = "json"
 log_level = "info"

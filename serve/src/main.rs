@@ -4,6 +4,8 @@ use std::time::Duration;
 use tokio::signal;
 
 use llm_serve::api::{build_router, AppState};
+use llm_serve::cache::memory::MemoryCache;
+use llm_serve::cache::Cache;
 use llm_serve::config::load_config;
 use llm_serve::executor::Executor;
 use llm_serve::observability::logging::init_tracing;
@@ -58,10 +60,24 @@ async fn main() {
 
     let router = Arc::new(RuleBasedRouter::new(routing_rules));
     let registry = Arc::new(registry);
-    let executor = Arc::new(Executor::new(
-        Arc::clone(&registry),
-        &config.executor,
-    ));
+
+    let cache: Option<Arc<dyn Cache>> = if config.cache.enabled {
+        tracing::info!(
+            max_entries = config.cache.max_entries,
+            ttl_secs = config.cache.ttl_secs,
+            "cache enabled"
+        );
+        Some(Arc::new(MemoryCache::new(&config.cache)))
+    } else {
+        tracing::info!("cache disabled");
+        None
+    };
+
+    let mut executor = Executor::new(Arc::clone(&registry), &config.executor);
+    if let Some(ref cache) = cache {
+        executor = executor.with_cache(Arc::clone(cache));
+    }
+    let executor = Arc::new(executor);
 
     let state = Arc::new(AppState {
         config: Arc::new(config.clone()),
@@ -69,6 +85,7 @@ async fn main() {
         router,
         executor,
         metrics_handle: Some(metrics_handle),
+        cache,
     });
 
     let app = build_router(state);

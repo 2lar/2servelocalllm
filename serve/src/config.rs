@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub executor: ExecutorConfig,
     #[serde(default)]
     pub observability: ObservabilityConfig,
+    #[serde(default)]
+    pub cache: CacheConfig,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -30,6 +32,38 @@ impl Default for ObservabilityConfig {
             log_level: default_log_level(),
         }
     }
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CacheConfig {
+    #[serde(default = "default_cache_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_cache_max_entries")]
+    pub max_entries: usize,
+    #[serde(default = "default_cache_ttl_secs")]
+    pub ttl_secs: u64,
+}
+
+impl Default for CacheConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_cache_enabled(),
+            max_entries: default_cache_max_entries(),
+            ttl_secs: default_cache_ttl_secs(),
+        }
+    }
+}
+
+fn default_cache_enabled() -> bool {
+    true
+}
+
+fn default_cache_max_entries() -> usize {
+    1000
+}
+
+fn default_cache_ttl_secs() -> u64 {
+    3600
 }
 
 fn default_log_format() -> String {
