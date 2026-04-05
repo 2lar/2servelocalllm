@@ -1,0 +1,26 @@
+services:
+  llm-serve:
+    build:
+      context: ./serve
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    volumes:
+      # Mount the llama-server binary from the host
+      # Replace left side with the actual host path to llama-server binary
+      - /path/to/llama.cpp/build/bin/llama-server:/llama/llama-server:ro
+      # Mount model files from the host
+      # Replace left side with the actual host path to the model file
+      - /path/to/models:/models:ro
+    environment:
+      - APP__LLAMA__ENABLED=true
+      - APP__LLAMA__BINARY=/llama/llama-server
+      - APP__LLAMA__MODEL=/models/model.gguf
+    # Uncomment below for NVIDIA GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
