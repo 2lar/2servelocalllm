@@ -210,12 +210,62 @@ The routing engine uses the `task` field to decide which provider handles the re
 
 ---
 
+## Using with Claude Code
+
+llm-serve is a drop-in replacement for the Anthropic API. Claude Code talks to it natively via `POST /v1/messages`.
+
+### .bashrc aliases
+
+```bash
+# Start the full stack (one command)
+alias ai-start='cd ~/llm/2servelocalllm/serve && cargo run --release'
+
+# Stop the full stack
+alias ai-stop='pkill -f llm-serve; echo Stack stopped.'
+
+# Claude Code → local model (free, private, routed through llm-serve)
+alias claude-local='ANTHROPIC_BASE_URL="http://localhost:3000" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
+
+# Claude Code → Anthropic cloud (requires API key)
+alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
+```
+
+Add these to your `~/.bashrc`:
+
+```bash
+cat >> ~/.bashrc << 'EOF'
+alias ai-start='cd ~/llm/2servelocalllm/serve && cargo run --release'
+alias ai-stop='pkill -f llm-serve; echo Stack stopped.'
+alias claude-local='ANTHROPIC_BASE_URL="http://localhost:3000" ANTHROPIC_AUTH_TOKEN="local-dev" ANTHROPIC_API_KEY="" claude'
+alias claude-cloud='unset ANTHROPIC_BASE_URL; unset ANTHROPIC_AUTH_TOKEN; claude'
+EOF
+source ~/.bashrc
+```
+
+### Daily workflow
+
+```bash
+# Terminal 1: start the stack
+ai-start
+# Wait for "listening on 0.0.0.0:3000"
+
+# Terminal 2: use Claude Code with your local model
+cd ~/your-project
+claude-local
+```
+
+That's it. Claude Code sends Anthropic API requests to llm-serve on port 3000, which routes them through the serving layer to llama-server on port 8080.
+
+---
+
 ## Endpoints Reference
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
+| `/` | HEAD/GET | Liveness check (for Claude Code handshake) |
 | `/health` | GET | Health check — returns `{"status": "ok"}` |
-| `/v1/generate` | POST | Generate text (JSON or SSE streaming) |
+| `/v1/messages` | POST | **Anthropic Messages API** (what Claude Code uses) |
+| `/v1/generate` | POST | Native API — generate text (JSON or SSE streaming) |
 | `/metrics` | GET | Prometheus metrics (request counts, latency, tokens, cache hits) |
 | `/v1/evaluate` | POST | Submit a quality score for a past request |
 | `/v1/eval/stats` | GET | Aggregated stats per provider/task |
