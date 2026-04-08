@@ -58,3 +58,55 @@ pub struct EvaluateRequest {
 pub struct EvalBestQuery {
     pub task: String,
 }
+
+/// OpenAI-compatible embedding request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbedRequest {
+    pub input: EmbedInput,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub encoding_format: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EmbedInput {
+    Single(String),
+    Batch(Vec<String>),
+}
+
+impl EmbedInput {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            EmbedInput::Single(s) => vec![s],
+            EmbedInput::Batch(v) => v,
+        }
+    }
+}
+
+/// OpenAI-compatible embedding response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbedResponse {
+    pub object: String,
+    pub data: Vec<EmbeddingData>,
+    pub model: String,
+    pub usage: EmbedUsage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddingData {
+    pub object: String,
+    pub embedding: Vec<f32>,
+    pub index: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbedUsage {
+    pub prompt_tokens: u32,
+    pub total_tokens: u32,
+}

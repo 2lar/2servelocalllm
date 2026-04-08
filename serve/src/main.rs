@@ -7,6 +7,7 @@ use llm_serve::api::{build_router, AppState};
 use llm_serve::cache::memory::MemoryCache;
 use llm_serve::cache::Cache;
 use llm_serve::config::load_config;
+use llm_serve::embedding::EmbeddingProvider;
 use llm_serve::eval::store::EvalStore;
 use llm_serve::executor::Executor;
 use llm_serve::observability::logging::init_tracing;
@@ -25,14 +26,21 @@ async fn main() {
 
     init_tracing(&config.observability.log_format, &config.observability.log_level);
     let metrics_handle = init_metrics();
+    let embedding_enabled = config
+        .embedding
+        .as_ref()
+        .is_some_and(|e| e.enabled);
+
     tracing::info!(
         host = %config.server.host,
         port = config.server.port,
         llama_enabled = config.llama.enabled,
+        embedding_enabled,
         "starting llm-serve"
     );
 
     let mut process_manager: Option<ProcessManager> = None;
+    let mut embed_process_manager: Option<ProcessManager> = None;
     let mut registry = ProviderRegistry::new();
 
     if config.llama.enabled {
@@ -54,6 +62,24 @@ async fn main() {
         let mock = MockProvider::new(Duration::from_millis(50));
         registry.register("mock".to_string(), Arc::new(mock));
     }
+
+    // Start embedding llama-server if configured.
+    let embedding_provider = if let Some(ref embed_cfg) = config.embedding {
+        if embed_cfg.enabled {
+            let pm = ProcessManager::start_embedding(embed_cfg)
+                .await
+                .expect("failed to start embedding llama-server");
+            embed_process_manager = Some(pm);
+
+            let provider = EmbeddingProvider::new(embed_cfg)
+                .expect("failed to create embedding provider");
+            Some(Arc::new(provider))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let router: Arc<dyn Router> = match config
         .routing
@@ -124,6 +150,7 @@ async fn main() {
         metrics_handle: Some(metrics_handle),
         cache,
         eval_store,
+        embedding_provider,
     });
 
     let app = build_router(state);
@@ -139,6 +166,9 @@ async fn main() {
         .await
         .expect("server error");
 
+    if let Some(mut pm) = embed_process_manager {
+        pm.shutdown().await;
+    }
     if let Some(mut pm) = process_manager {
         pm.shutdown().await;
     }

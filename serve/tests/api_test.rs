@@ -51,6 +51,7 @@ fn test_config() -> AppConfig {
         observability: ObservabilityConfig::default(),
         cache: CacheConfig::default(),
         eval: EvalConfig::default(),
+        embedding: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn test_state() -> Arc<AppState> {
         metrics_handle: None,
         cache: None,
         eval_store: None,
+        embedding_provider: None,
     })
 }
 
@@ -98,6 +100,7 @@ fn test_state_with_eval() -> Arc<AppState> {
         metrics_handle: None,
         cache: None,
         eval_store: Some(eval_store),
+        embedding_provider: None,
     })
 }
 
@@ -351,6 +354,7 @@ async fn routing_selects_correct_provider_by_task() {
         metrics_handle: None,
         cache: None,
         eval_store: None,
+        embedding_provider: None,
     });
 
     let app = build_router(state);
@@ -432,6 +436,7 @@ async fn metrics_endpoint_with_handle_returns_200() {
         metrics_handle: Some(handle),
         cache: None,
         eval_store: None,
+        embedding_provider: None,
     });
 
     let app = build_router(state);
@@ -485,6 +490,7 @@ async fn cached_response_returns_cached_true() {
         metrics_handle: None,
         cache: Some(cache),
         eval_store: None,
+        embedding_provider: None,
     });
 
     let body_json = serde_json::json!({

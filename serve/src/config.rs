@@ -6,6 +6,8 @@ use serde::Deserialize;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub llama: LlamaConfig,
+    #[serde(default)]
+    pub embedding: Option<EmbeddingConfig>,
     pub providers: HashMap<String, ProviderConfig>,
     #[serde(default)]
     pub routing: Option<RoutingConfig>,
@@ -236,6 +238,50 @@ pub struct RoutingRule {
     pub keywords: Option<Vec<String>>,
     pub provider: String,
     pub fallbacks: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct EmbeddingConfig {
+    #[serde(default = "default_embedding_enabled")]
+    pub enabled: bool,
+    pub binary: String,
+    pub model: String,
+    #[serde(default = "default_embedding_host")]
+    pub host: String,
+    #[serde(default = "default_embedding_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub gpu_layers: u32,
+    #[serde(default = "default_embedding_ctx_size")]
+    pub ctx_size: u32,
+    #[serde(default = "default_embedding_health_timeout")]
+    pub health_check_timeout_secs: u64,
+    #[serde(default = "default_embedding_health_interval")]
+    pub health_check_interval_ms: u64,
+}
+
+fn default_embedding_enabled() -> bool {
+    true
+}
+
+fn default_embedding_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_embedding_port() -> u16 {
+    8081
+}
+
+fn default_embedding_ctx_size() -> u32 {
+    2048
+}
+
+fn default_embedding_health_timeout() -> u64 {
+    30
+}
+
+fn default_embedding_health_interval() -> u64 {
+    1000
 }
 
 pub fn load_config() -> Result<AppConfig, crate::error::ServeError> {

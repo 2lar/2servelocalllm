@@ -15,7 +15,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::api::anthropic::{
     AnthropicRequest, AnthropicResponse, AnthropicUsage, ContentBlock, count_input_tokens,
 };
-use crate::api::types::{EvalBestQuery, EvaluateRequest, GenerateRequest, RoutingInfo};
+use crate::api::types::{EmbedRequest, EvalBestQuery, EvaluateRequest, GenerateRequest, RoutingInfo};
 use crate::error::ServeError;
 use crate::eval::EvalRecord;
 use crate::router::RoutingDecision;
@@ -164,6 +164,19 @@ pub async fn eval_best(
 
     let best = eval_store.best_provider_for_task(&query.task).await;
     Ok(Json(json!({"task": query.task, "best_provider": best})))
+}
+
+pub async fn embeddings(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<EmbedRequest>,
+) -> Result<impl IntoResponse, ServeError> {
+    let provider = state
+        .embedding_provider
+        .as_ref()
+        .ok_or_else(|| ServeError::NotSupported("embedding endpoint not configured".into()))?;
+
+    let resp = provider.embed(&req).await?;
+    Ok(Json(resp).into_response())
 }
 
 /// Anthropic Messages API compatible endpoint (`POST /v1/messages`).

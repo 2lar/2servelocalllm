@@ -13,6 +13,18 @@ ctx_size = 16384
 health_check_timeout_secs = 60
 health_check_interval_ms = 2000
 
+# Embedding model — disabled by default (download model first, see PLAN-EMBEDDINGS.md)
+# [embedding]
+# enabled = true
+# binary = "../llama.cpp/build/bin/llama-server"
+# model = "../models/nomic-embed-text-v1.5.Q8_0.gguf"
+# host = "127.0.0.1"
+# port = 8081
+# gpu_layers = 0
+# ctx_size = 2048
+# health_check_timeout_secs = 30
+# health_check_interval_ms = 1000
+
 [providers.local]
 name = "local-qwen"
 url = "http://localhost:8080"

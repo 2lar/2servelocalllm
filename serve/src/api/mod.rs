@@ -12,6 +12,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::cache::Cache;
 use crate::config::AppConfig;
+use crate::embedding::EmbeddingProvider;
 use crate::eval::store::EvalStore;
 use crate::executor::Executor;
 use crate::provider::registry::ProviderRegistry;
@@ -25,6 +26,7 @@ pub struct AppState {
     pub metrics_handle: Option<PrometheusHandle>,
     pub cache: Option<Arc<dyn Cache>>,
     pub eval_store: Option<Arc<EvalStore>>,
+    pub embedding_provider: Option<Arc<EmbeddingProvider>>,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -34,6 +36,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health", get(routes::health))
         .route("/v1/generate", post(routes::generate))
         .route("/v1/messages", post(routes::messages))
+        .route("/v1/embeddings", post(routes::embeddings))
         .route("/v1/evaluate", post(routes::evaluate))
         .route("/v1/eval/stats", get(routes::eval_stats))
         .route("/v1/eval/best", get(routes::eval_best))

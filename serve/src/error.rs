@@ -25,6 +25,9 @@ pub enum ServeError {
     #[error("request timed out after {timeout_secs}s")]
     Timeout { timeout_secs: u64 },
 
+    #[error("not supported: {0}")]
+    NotSupported(String),
+
     #[error("internal error: {0}")]
     Internal(String),
 }
@@ -53,6 +56,7 @@ impl ServeError {
             | ServeError::ProcessManager(_)
             | ServeError::Routing(_)
             | ServeError::ProviderNotFound(_)
+            | ServeError::NotSupported(_)
             | ServeError::Internal(_) => false,
         }
     }
@@ -67,6 +71,7 @@ impl IntoResponse for ServeError {
             ServeError::ProviderNotFound(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ServeError::ProcessManager(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
             ServeError::Timeout { .. } => (StatusCode::GATEWAY_TIMEOUT, self.to_string()),
+            ServeError::NotSupported(_) => (StatusCode::NOT_IMPLEMENTED, self.to_string()),
             ServeError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
